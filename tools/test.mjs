@@ -12,6 +12,7 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { readFileSync, writeFileSync, mkdtempSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
@@ -19,13 +20,30 @@ import { fileURLToPath } from "node:url";
 
 import * as srt from "./lib/srt.mjs";
 import { loadGlossary, buildRules, applyGlossary, formatForPrompt } from "./lib/glossary.mjs";
-import {
+import { getProvider, PROVIDERS, PROVIDER_IDS } from "./lib/providers.mjs";
+
+// `DEFAULTS` trong cleanup.mjs đọc process.env **lúc load module**. Nếu máy
+// chạy test có `AZURE_OPENAI_ENDPOINT` thì provider mặc định thành
+// `azure-openai` và các test parseArgs sẽ đỏ vì ràng buộc Azure — test đúng
+// hay sai lại phụ thuộc shell của người chạy. Xoá các biến backend khỏi env
+// TRƯỚC khi import (nên phải dùng `await import`, vì static import chạy sớm
+// hơn mọi câu lệnh). Cũng làm sạch env cho các tiến trình con: mỗi test tự
+// truyền `LLM_BASE_URL` của nó.
+for (const k of [
+  "LLM_PROVIDER", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "GLOSSARY_PATH",
+  "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY",
+  "AZURE_OPENAI_DEPLOYMENT_NAME", "AZURE_OPENAI_API_VERSION",
+]) {
+  delete process.env[k];
+}
+
+const {
   parseArgs,
   planBatches,
   parseBatchResponse,
   buildSystemPrompt,
   buildUserMessage,
-} from "./transcript-cleanup/cleanup.mjs";
+} = await import("./transcript-cleanup/cleanup.mjs");
 
 const TOOLS = dirname(fileURLToPath(import.meta.url));
 const TESTDATA = join(TOOLS, "testdata");
@@ -268,6 +286,121 @@ describe("lib/glossary", () => {
   });
 });
 
+// ------------------------------------------------------------------ providers
+
+describe("lib/providers", () => {
+  // Cấu hình đủ cho cả ba provider; mỗi provider chỉ đọc phần nó cần.
+  const cfg = {
+    baseUrl: "https://r.openai.azure.com/",
+    deployment: "gpt-4o",
+    apiVersion: "2024-05-01-preview",
+    apiKey: "k",
+    model: "m",
+    maxTokens: 512,
+    system: "SYS",
+    user: "USR",
+  };
+
+  test("getProvider trả đúng provider, và báo lỗi liệt kê id hợp lệ khi sai", () => {
+    for (const id of PROVIDER_IDS) assert.equal(getProvider(id).id, id);
+    assert.throws(() => getProvider("gemini"), /provider không rõ: "gemini"/);
+    assert.throws(() => getProvider("gemini"), /azure-openai/);
+    assert.throws(() => getProvider(undefined), /provider không rõ/);
+  });
+
+  test("cả ba provider đều khai báo đủ bốn hàm", () => {
+    for (const id of PROVIDER_IDS) {
+      for (const fn of ["url", "headers", "body", "extract"]) {
+        assert.equal(typeof PROVIDERS[id][fn], "function", `${id}.${fn} thiếu`);
+      }
+    }
+  });
+
+  test("anthropic: /v1/messages, header x-api-key, system là trường riêng", () => {
+    const p = getProvider("anthropic");
+    assert.equal(p.url({ baseUrl: "http://127.0.0.1:5099" }), "http://127.0.0.1:5099/v1/messages");
+    const h = p.headers(cfg);
+    assert.equal(h["x-api-key"], "k");
+    assert.equal(h["anthropic-version"], "2023-06-01");
+    assert.equal(h["api-key"], undefined);
+    const b = p.body(cfg);
+    assert.equal(b.system, "SYS");
+    assert.equal(b.model, "m");
+    assert.deepEqual(b.messages, [{ role: "user", content: "USR" }]);
+  });
+
+  test("azure-openai: deployment + api-version trong URL, header api-key", () => {
+    const p = getProvider("azure-openai");
+    assert.equal(
+      p.url(cfg),
+      "https://r.openai.azure.com/openai/deployments/gpt-4o/chat/completions" +
+        "?api-version=2024-05-01-preview",
+      "dấu / cuối baseUrl phải bị bỏ, không được thành //openai",
+    );
+    const h = p.headers(cfg);
+    assert.equal(h["api-key"], "k");
+    assert.equal(h["x-api-key"], undefined, "Azure không đọc x-api-key");
+    assert.equal(h.Authorization, undefined);
+    const b = p.body(cfg);
+    assert.equal("system" in b, false, "Azure không có trường system riêng");
+    assert.equal("model" in b, false, "model do deployment quyết, gửi kèm là gây hiểu nhầm");
+    assert.equal(b.temperature, 0);
+    assert.deepEqual(
+      b.messages.map((m) => m.role),
+      ["system", "user"],
+    );
+    assert.equal(b.messages[0].content, "SYS");
+  });
+
+  test("azure-openai: deployment có ký tự cần escape vẫn ra URL hợp lệ", () => {
+    const url = getProvider("azure-openai").url({ ...cfg, deployment: "gpt 4o/v2" });
+    assert.match(url, /deployments\/gpt%204o%2Fv2\/chat\/completions/);
+  });
+
+  test("openai: Authorization Bearer, /v1/chat/completions, có model", () => {
+    const p = getProvider("openai");
+    assert.equal(p.url(cfg), "https://r.openai.azure.com/v1/chat/completions");
+    assert.equal(p.headers(cfg).Authorization, "Bearer k");
+    assert.equal(p.body(cfg).model, "m");
+  });
+
+  test("không có apiKey thì không gửi header rỗng (dùng mock/LLM local)", () => {
+    for (const id of PROVIDER_IDS) {
+      const h = PROVIDERS[id].headers({ apiKey: "" });
+      for (const name of ["x-api-key", "api-key", "Authorization"]) {
+        assert.equal(h[name], undefined, `${id} gửi ${name} rỗng`);
+      }
+      assert.equal(h["Content-Type"], "application/json");
+    }
+  });
+
+  test("extract: đúng đường dẫn của từng hình dạng phản hồi", () => {
+    const a = getProvider("anthropic");
+    assert.equal(a.extract({ content: [{ type: "text", text: "xin chào" }] }), "xin chào");
+    // Nhiều block: nối lại; block không phải text thì bỏ.
+    assert.equal(
+      a.extract({ content: [{ type: "text", text: "a" }, { type: "thinking" }, { type: "text", text: "b" }] }),
+      "ab",
+    );
+    const z = getProvider("azure-openai");
+    assert.equal(z.extract({ choices: [{ message: { content: "xin chào" } }] }), "xin chào");
+    assert.equal(getProvider("openai").extract, z.extract, "OpenAI và Azure cùng hình dạng");
+  });
+
+  test("extract trả null khi phản hồi sai hình dạng — để callLlm fail-open", () => {
+    const bad = [null, undefined, {}, { content: "chuỗi chứ không phải mảng" }, { choices: [] }];
+    for (const id of PROVIDER_IDS) {
+      for (const data of bad) {
+        const got = PROVIDERS[id].extract(data);
+        assert.ok(
+          got === null || got === "",
+          `${id}.extract(${JSON.stringify(data)}) phải null/rỗng, nhận ${JSON.stringify(got)}`,
+        );
+      }
+    }
+  });
+});
+
 // ----------------------------------------------------------- cleanup: thuần
 
 describe("transcript-cleanup: hàm thuần", () => {
@@ -306,6 +439,63 @@ describe("transcript-cleanup: hàm thuần", () => {
 
   test("parseArgs cho phép overlap = 0", () => {
     assert.equal(parseArgs(["a.srt", "-o", "b", "--overlap", "0"]).overlap, 0);
+  });
+
+  test("parseArgs nhận cấu hình Azure đầy đủ", () => {
+    const o = parseArgs([
+      "a.srt", "-o", "b",
+      "--provider", "azure-openai",
+      "--base-url", "https://r.openai.azure.com",
+      "--deployment", "gpt-4o",
+      "--api-version", "2024-05-01-preview",
+    ]);
+    assert.equal(o.provider, "azure-openai");
+    assert.equal(o.deployment, "gpt-4o");
+    assert.equal(o.apiVersion, "2024-05-01-preview");
+  });
+
+  test("parseArgs từ chối provider lạ, liệt kê id hợp lệ", () => {
+    assert.throws(
+      () => parseArgs(["a.srt", "-o", "b", "--provider", "gemini"]),
+      /--provider chỉ nhận .*azure-openai/,
+    );
+  });
+
+  // Azure thiếu deployment/api-version thì trả 404 với thông báo rất khó hiểu,
+  // còn baseUrl sai thì fetch lỗi ở tầng DNS. Chặn ở parseArgs để lỗi đọc được.
+  test("parseArgs chặn Azure thiếu deployment", () => {
+    assert.throws(
+      () => parseArgs(["a.srt", "-o", "b", "--provider", "azure-openai",
+        "--base-url", "https://r.openai.azure.com", "--deployment", ""]),
+      /cần tên deployment/,
+    );
+  });
+
+  test("parseArgs chặn Azure thiếu api-version", () => {
+    assert.throws(
+      () => parseArgs(["a.srt", "-o", "b", "--provider", "azure-openai",
+        "--base-url", "https://r.openai.azure.com", "--deployment", "gpt-4o",
+        "--api-version", ""]),
+      /cần api-version/,
+    );
+  });
+
+  test("parseArgs chặn Azure với base-url không phải http(s)", () => {
+    assert.throws(
+      () => parseArgs(["a.srt", "-o", "b", "--provider", "azure-openai",
+        "--deployment", "gpt-4o", "--base-url", "r.openai.azure.com"]),
+      /endpoint đầy đủ/,
+    );
+  });
+
+  test("parseArgs không áp ràng buộc Azure cho provider khác", () => {
+    // anthropic không cần deployment, và chấp nhận baseUrl localhost.
+    // `--provider` ghi đè tường minh để test không phụ thuộc env của máy chạy.
+    const o = parseArgs([
+      "a.srt", "-o", "b", "--provider", "anthropic", "--base-url", "http://127.0.0.1:5099",
+    ]);
+    assert.equal(o.provider, "anthropic");
+    assert.equal(o.baseUrl, "http://127.0.0.1:5099");
   });
 
   test("planBatches phủ hết câu, không trùng, ngữ cảnh lấy từ câu trước", () => {
@@ -566,6 +756,114 @@ describe("transcript-cleanup end-to-end với mock LLM", () => {
     });
     assert.equal(r.code, 1);
     assert.match(r.stderr, /SubRip/);
+  });
+});
+
+// ------------------------------------------- cleanup qua provider azure-openai
+
+/**
+ * Stub hình dạng Azure OpenAI, chạy ngay trong tiến trình test.
+ *
+ * Mock LLM ở `tools/mock-llm` cố tình chỉ nói hình dạng Anthropic, nên không
+ * dùng để kiểm đường Azure được. Stub này ghi lại mọi request để assert đúng
+ * bốn điểm khác biệt (URL path, api-version, tên header key, vị trí system
+ * prompt), và áp glossary để output so được với bản vàng.
+ */
+async function startAzureStub(port) {
+  const rules = buildRules(loadGlossary());
+  const seen = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      const u = new URL(req.url, "http://x");
+      let payload = null;
+      try {
+        payload = JSON.parse(body);
+      } catch {
+        /* giữ null — assert sẽ bắt */
+      }
+      seen.push({ path: u.pathname, apiVersion: u.searchParams.get("api-version"), headers: req.headers, payload });
+      const user = payload?.messages?.find((m) => m.role === "user")?.content ?? "";
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: applyGlossary(user, rules) } }],
+        }),
+      );
+    });
+  });
+  await new Promise((ok) => server.listen(port, "127.0.0.1", ok));
+  return { seen, stop: () => new Promise((ok) => server.close(ok)) };
+}
+
+describe("transcript-cleanup qua provider azure-openai", () => {
+  const PORT = 5311;
+  let stub;
+
+  before(async () => {
+    stub = await startAzureStub(PORT);
+  });
+  after(async () => {
+    if (stub) await stub.stop();
+  });
+
+  test("gửi đúng hình dạng wire Azure và ra đúng bản vàng", async () => {
+    const out = join(workdir, "azure.srt");
+    const r = await runCleanup([join(TESTDATA, "codeswitch-vi.srt"), "-o", out], {
+      AZURE_OPENAI_ENDPOINT: `http://127.0.0.1:${PORT}`,
+      AZURE_OPENAI_DEPLOYMENT_NAME: "gpt-4o",
+      AZURE_OPENAI_API_VERSION: "2024-05-01-preview",
+      AZURE_OPENAI_API_KEY: "secret",
+    });
+    assert.equal(r.code, 0, r.stderr);
+
+    // Chỉ riêng AZURE_OPENAI_ENDPOINT đã đủ suy ra provider — không cần --provider.
+    assert.match(r.stderr, /provider=azure-openai/);
+    assert.match(r.stderr, /deployment=gpt-4o api-version=2024-05-01-preview/);
+    assert.doesNotMatch(r.stderr, /model=/, "Azure không chọn model qua body");
+
+    assert.ok(stub.seen.length > 0, "stub phải nhận được request");
+    for (const req of stub.seen) {
+      assert.equal(req.path, "/openai/deployments/gpt-4o/chat/completions");
+      assert.equal(req.apiVersion, "2024-05-01-preview");
+      assert.equal(req.headers["api-key"], "secret");
+      assert.equal(req.headers["x-api-key"], undefined);
+      assert.equal(req.headers.authorization, undefined);
+      assert.equal("system" in req.payload, false);
+      assert.equal(req.payload.temperature, 0);
+      assert.deepEqual(
+        req.payload.messages.map((m) => m.role),
+        ["system", "user"],
+      );
+    }
+
+    assert.equal(read(out), read(join(TESTDATA, "codeswitch-vi.expected.srt")));
+  });
+
+  test("thiếu deployment: thoát 2 với thông báo đọc được, không gọi mạng", async () => {
+    const before = stub.seen.length;
+    const r = await runCleanup([join(TESTDATA, "codeswitch-vi.srt"), "-o", join(workdir, "nodep.srt")], {
+      AZURE_OPENAI_ENDPOINT: `http://127.0.0.1:${PORT}`,
+      AZURE_OPENAI_API_VERSION: "2024-05-01-preview",
+    });
+    assert.equal(r.code, 2);
+    assert.match(r.stderr, /AZURE_OPENAI_DEPLOYMENT_NAME/);
+    assert.equal(stub.seen.length, before, "sai tham số thì không được gửi phụ đề đi");
+  });
+
+  test("cảnh báo dữ liệu ra ngoài khi backend không phải localhost", async () => {
+    // Cổng chết + retries 0: chỉ cần xem banner, không cần backend thật.
+    const r = await runCleanup(
+      [join(TESTDATA, "codeswitch-vi.srt"), "-o", join(workdir, "warn.srt"), "--retries", "0"],
+      {
+        AZURE_OPENAI_ENDPOINT: "https://r.openai.azure.com",
+        AZURE_OPENAI_DEPLOYMENT_NAME: "gpt-4o",
+        AZURE_OPENAI_API_VERSION: "2024-05-01-preview",
+      },
+    );
+    assert.match(r.stderr, /CẢNH BÁO DỮ LIỆU/);
+    assert.match(r.stderr, /không có API key/, "thiếu key + không localhost thì phải cảnh báo");
   });
 });
 

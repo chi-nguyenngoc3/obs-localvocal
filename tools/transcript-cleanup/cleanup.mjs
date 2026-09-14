@@ -21,10 +21,18 @@
  *   node cleanup.mjs in.srt -o out.srt --dry-run     # không gọi LLM, in kế hoạch
  *
  * Env:
+ *   LLM_PROVIDER  anthropic (mặc định) | azure-openai | openai
  *   LLM_BASE_URL  mặc định http://127.0.0.1:5099 (mock ở tools/mock-llm)
- *   LLM_API_KEY   gửi qua header `x-api-key` nếu có; không log ra bất cứ đâu
- *   LLM_MODEL     mặc định claude-sonnet-5
+ *   LLM_API_KEY   header tuỳ provider (`x-api-key` / `api-key` / Bearer);
+ *                 không log ra bất cứ đâu
+ *   LLM_MODEL     mặc định claude-sonnet-5. Azure bỏ qua — model do deployment quyết
  *   GLOSSARY_PATH mặc định tools/vib-glossary.json
+ *
+ *   Riêng Azure OpenAI (tên biến trùng với chuẩn Azure SDK nên dán thẳng được):
+ *   AZURE_OPENAI_ENDPOINT        vd https://<resource>.openai.azure.com/
+ *   AZURE_OPENAI_API_KEY         key
+ *   AZURE_OPENAI_DEPLOYMENT_NAME vd gpt-4o
+ *   AZURE_OPENAI_API_VERSION     vd 2024-05-01-preview
  *
  * CẢNH BÁO DỮ LIỆU: tool này gửi **nội dung phụ đề** tới `LLM_BASE_URL`. Nếu URL
  * đó là API công cộng thì nội dung họp rời khỏi hạ tầng của bạn. Với họp nội bộ
@@ -42,17 +50,32 @@ import {
   formatForPrompt,
   DEFAULT_GLOSSARY_PATH,
 } from "../lib/glossary.mjs";
+import { getProvider, PROVIDER_IDS } from "../lib/providers.mjs";
+
+// Azure dùng tên biến riêng (trùng chuẩn Azure SDK) nên cấu hình dán thẳng từ
+// portal được. Nếu có AZURE_OPENAI_ENDPOINT mà không đặt LLM_PROVIDER thì suy ra
+// luôn là azure-openai — đỡ một bước dễ quên.
+const AZURE_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT ?? "";
+const inferredProvider = AZURE_ENDPOINT ? "azure-openai" : "anthropic";
 
 const DEFAULTS = {
-  baseUrl: process.env.LLM_BASE_URL ?? "http://127.0.0.1:5099",
+  provider: process.env.LLM_PROVIDER ?? inferredProvider,
+  baseUrl:
+    process.env.LLM_BASE_URL ?? AZURE_ENDPOINT ?? "http://127.0.0.1:5099",
   model: process.env.LLM_MODEL ?? "claude-sonnet-5",
-  apiKey: process.env.LLM_API_KEY ?? "",
+  apiKey:
+    process.env.LLM_API_KEY ?? process.env.AZURE_OPENAI_API_KEY ?? "",
+  deployment: process.env.AZURE_OPENAI_DEPLOYMENT_NAME ?? "",
+  apiVersion: process.env.AZURE_OPENAI_API_VERSION ?? "2024-05-01-preview",
   glossaryPath: process.env.GLOSSARY_PATH ?? DEFAULT_GLOSSARY_PATH,
   batchSize: 8,
   overlap: 2,
   retries: 2,
   timeoutMs: 60_000,
 };
+
+// `??` không bắt được chuỗi rỗng, mà env rỗng là trường hợp hay gặp.
+if (!DEFAULTS.baseUrl) DEFAULTS.baseUrl = "http://127.0.0.1:5099";
 
 const USAGE = `transcript-cleanup — làm sạch phụ đề tiếng Việt chêm tiếng Anh
 
@@ -64,7 +87,10 @@ Tuỳ chọn
       --overlap <n>      Số câu trước đó gửi kèm làm ngữ cảnh (mặc định ${DEFAULTS.overlap})
       --glossary <path>  File glossary JSON (mặc định tools/vib-glossary.json)
       --model <name>     Model (mặc định ${DEFAULTS.model})
+      --provider <id>    ${PROVIDER_IDS.join(" | ")} (mặc định ${DEFAULTS.provider})
       --base-url <url>   Endpoint LLM (mặc định ${DEFAULTS.baseUrl})
+      --deployment <n>   Azure: tên deployment (bắt buộc với azure-openai)
+      --api-version <v>  Azure: api-version (mặc định ${DEFAULTS.apiVersion})
       --timeout <ms>     Timeout mỗi request (mặc định ${DEFAULTS.timeoutMs})
       --retries <n>      Số lần thử lại mỗi batch (mặc định ${DEFAULTS.retries})
       --format srt|txt   Ép định dạng thay vì suy từ đuôi file
@@ -117,6 +143,17 @@ export function parseArgs(argv) {
         opts.model = needValue(i, a); i++; break;
       case "--base-url":
         opts.baseUrl = needValue(i, a); i++; break;
+      case "--provider": {
+        const v = needValue(i, a); i++;
+        if (!PROVIDER_IDS.includes(v)) {
+          throw new UsageError(`--provider chỉ nhận ${PROVIDER_IDS.join(" | ")}, nhận "${v}".`);
+        }
+        opts.provider = v; break;
+      }
+      case "--deployment":
+        opts.deployment = needValue(i, a); i++; break;
+      case "--api-version":
+        opts.apiVersion = needValue(i, a); i++; break;
       case "--timeout":
         opts.timeoutMs = positiveInt(needValue(i, a), a); i++; break;
       case "--retries":
@@ -142,6 +179,27 @@ export function parseArgs(argv) {
       `--overlap (${opts.overlap}) phải nhỏ hơn --batch-size (${opts.batchSize}), ` +
         "nếu không mỗi batch sẽ toàn là ngữ cảnh.",
     );
+  }
+
+  // Azure ghép deployment vào URL, thiếu là 404 với thông báo rất khó hiểu —
+  // chặn ngay ở đây thay vì để người dùng đi debug HTTP.
+  if (opts.provider === "azure-openai") {
+    if (!opts.deployment) {
+      throw new UsageError(
+        "azure-openai cần tên deployment. Đặt AZURE_OPENAI_DEPLOYMENT_NAME hoặc --deployment.",
+      );
+    }
+    if (!opts.apiVersion) {
+      throw new UsageError(
+        "azure-openai cần api-version. Đặt AZURE_OPENAI_API_VERSION hoặc --api-version.",
+      );
+    }
+    if (!/^https?:\/\//.test(opts.baseUrl)) {
+      throw new UsageError(
+        `azure-openai cần endpoint đầy đủ (https://<resource>.openai.azure.com), nhận "${opts.baseUrl}". ` +
+          "Đặt AZURE_OPENAI_ENDPOINT hoặc --base-url.",
+      );
+    }
   }
 
   opts.format ??= opts.input.toLowerCase().endsWith(".srt") ? "srt" : "txt";
@@ -280,26 +338,27 @@ export function parseBatchResponse(responseText, batch) {
 }
 
 /**
- * Gọi LLM (Anthropic Messages API shape) cho một batch, có retry + timeout.
+ * Gọi LLM cho một batch, có retry + timeout. Hình dạng wire do provider quyết
+ * định (`../lib/providers.mjs`) — hàm này chỉ lo retry, timeout và fail-open.
  *
  * @returns {Promise<{texts: string[], matched: number, ok: boolean, error?: string}>}
  *   `ok: false` nghĩa là đã hết lượt thử; `texts` khi đó là **bản gốc** (fail-open).
  */
-async function callLlm(batch, { baseUrl, model, apiKey, timeoutMs, retries }, systemPrompt) {
-  const url = `${baseUrl.replace(/\/+$/, "")}/v1/messages`;
-  const headers = {
-    "Content-Type": "application/json",
-    "anthropic-version": "2023-06-01",
-  };
-  if (apiKey) headers["x-api-key"] = apiKey;
+async function callLlm(batch, cfg, systemPrompt) {
+  const { timeoutMs, retries } = cfg;
+  const provider = getProvider(cfg.provider);
+  const url = provider.url(cfg);
+  const headers = provider.headers(cfg);
 
-  const payload = JSON.stringify({
-    model,
-    // Đủ cho một batch câu; chặn trường hợp model lan thành bài luận.
-    max_tokens: Math.max(512, batch.items.join("\n").length * 2),
-    system: systemPrompt,
-    messages: [{ role: "user", content: buildUserMessage(batch) }],
-  });
+  const payload = JSON.stringify(
+    provider.body({
+      model: cfg.model,
+      // Đủ cho một batch câu; chặn trường hợp model lan thành bài luận.
+      maxTokens: Math.max(512, batch.items.join("\n").length * 2),
+      system: systemPrompt,
+      user: buildUserMessage(batch),
+    }),
+  );
 
   let lastError = "không rõ";
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -324,11 +383,9 @@ async function callLlm(batch, { baseUrl, model, apiKey, timeoutMs, retries }, sy
         continue;
       }
       const data = await res.json();
-      const text = Array.isArray(data?.content)
-        ? data.content.filter((b) => b?.type === "text").map((b) => b.text).join("")
-        : null;
+      const text = provider.extract(data);
       if (typeof text !== "string" || text === "") {
-        lastError = "phản hồi không có content[].text";
+        lastError = `phản hồi ${provider.id} không có trường text mong đợi`;
         continue;
       }
       return { ...parseBatchResponse(text, batch), ok: true };
@@ -412,9 +469,23 @@ async function main(argv) {
       `(${sendable.length} có nội dung) · ${batches.length} batch ` +
       `· batch=${opts.batchSize} overlap=${opts.overlap}`,
   );
-  console.error(`[cleanup] backend ${opts.baseUrl} model=${opts.model} glossary=${glossary.version}`);
-  if (!opts.apiKey && !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/.test(opts.baseUrl)) {
-    console.error("[cleanup] CẢNH BÁO: không có LLM_API_KEY nhưng backend không phải localhost.");
+  // Azure chọn model qua deployment, in `model=` ở đây sẽ gây hiểu nhầm.
+  const modelLabel =
+    opts.provider === "azure-openai"
+      ? `deployment=${opts.deployment} api-version=${opts.apiVersion}`
+      : `model=${opts.model}`;
+  console.error(
+    `[cleanup] backend ${opts.baseUrl} provider=${opts.provider} ` +
+      `${modelLabel} glossary=${glossary.version}`,
+  );
+  const isLocal = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/.test(opts.baseUrl);
+  if (!opts.apiKey && !isLocal) {
+    console.error("[cleanup] CẢNH BÁO: không có API key nhưng backend không phải localhost.");
+  }
+  if (!isLocal) {
+    console.error(
+      "[cleanup] CẢNH BÁO DỮ LIỆU: nội dung phụ đề đang được gửi ra khỏi máy này.",
+    );
   }
 
   if (opts.dryRun) {
