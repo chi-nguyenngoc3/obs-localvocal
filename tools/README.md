@@ -13,7 +13,7 @@ hoá giảm được bằng cấu hình, chưa cần tới tool nào ở đây.
 | [`transcript-cleanup/`](transcript-cleanup/) | CLI làm sạch file `.srt`/`.txt` qua LLM. **Đây là thứ bạn cần.** |
 | [`mock-llm/`](mock-llm/) | Backend LLM giả để dev/test không cần mạng và không tốn token |
 | [`testdata/`](testdata/) | Bộ dữ liệu vàng: input có lỗi + bản đúng + các ca biên |
-| [`lib/`](lib/) | Module dùng chung: parser `.srt` và glossary |
+| [`lib/`](lib/) | Module dùng chung: parser `.srt`, glossary, và hình dạng wire của từng backend LLM |
 | [`vib-glossary.json`](vib-glossary.json) | Thuật ngữ + biến thể phiên âm hoá hay gặp |
 | [`test.mjs`](test.mjs) | Test suite (`node --test tools/test.mjs`) |
 
@@ -59,15 +59,26 @@ Biến thể **dài được thử trước** biến thể ngắn, nên `"đi gi
 Một file này dùng cho ba nơi: ô **Initial prompt** của plugin, hộp thoại
 **Setup Filter and Replace**, và prompt của `transcript-cleanup`. Đổi glossary là đổi cả ba.
 
+## Backend LLM
+
+`transcript-cleanup` nói được ba hình dạng wire — `anthropic` (mặc định), `azure-openai`,
+`openai` (cũng dùng cho gateway nội bộ và LLM local). Chi tiết cờ + biến môi trường ở
+[`transcript-cleanup/README.md`](transcript-cleanup/README.md#backend-llm); hình dạng wire
+khai báo ở [`lib/providers.mjs`](lib/providers.mjs).
+
+`mock-llm` cố tình **chỉ** nói hình dạng Anthropic — nó là backend dev, không phải bản mô
+phỏng đầy đủ. Đường Azure có stub riêng trong [`test.mjs`](test.mjs).
+
 > **Glossary hiện tại là tạm.** Các biến thể do người viết dự đoán, không lấy từ bản ghi
 > thật. Thay bằng thuật ngữ thật của đơn vị bạn — đó là thứ quyết định chất lượng. Không cần
 > sửa code, chỉ sửa file JSON.
 
 ## Bảo mật
 
-`transcript-cleanup` gửi nội dung phụ đề tới `LLM_BASE_URL`. Nếu đó là API công cộng thì
-nội dung buổi họp rời khỏi hạ tầng của bạn — với họp nội bộ hoặc dữ liệu khách hàng, trỏ vào
-gateway nội bộ hoặc LLM chạy local.
+`transcript-cleanup` gửi nội dung phụ đề tới backend đã cấu hình. Nếu đó là API công cộng —
+kể cả Azure OpenAI — thì nội dung buổi họp rời khỏi hạ tầng của bạn; với họp nội bộ hoặc dữ
+liệu khách hàng, trỏ vào gateway nội bộ hoặc LLM chạy local. Tool in cảnh báo trên stderr mỗi
+lần backend không phải localhost.
 
 `mock-llm` chỉ bind `127.0.0.1` và không gọi ra ngoài. Cả hai tool chỉ log độ dài và thời
 gian, **không log nội dung câu**; API key không bao giờ vào log.

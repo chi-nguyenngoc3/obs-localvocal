@@ -56,10 +56,11 @@ tools/vib-glossary.json  ──┬─→ ô "Initial prompt" của plugin       
 | `tools/mock-llm/README.md` | G3 | — |
 | `tools/lib/srt.mjs` | G4 | Parser `.srt` round-trip trung thực |
 | `tools/lib/glossary.mjs` | G4 | Nạp + khớp glossary |
+| `tools/lib/providers.mjs` | G4+ | Hình dạng wire của 3 backend LLM |
 | `tools/transcript-cleanup/cleanup.mjs` | G4 | CLI chính |
 | `tools/transcript-cleanup/README.md` | G4 | — |
 | `tools/README.md` | G4 | Điểm vào cho `tools/` |
-| `tools/test.mjs` | G4 | 57 test, 6 suite |
+| `tools/test.mjs` | G4 | 75 test, 8 suite |
 
 **Sửa:** `README.md` — thêm mục "Language-specific guides" trỏ sang `docs/vietnamese-setup.md`.
 Đây là file duy nhất của plugin bị chạm, và chỉ là docs.
@@ -89,6 +90,17 @@ Việt thì càng dễ biến "meeting" thành "mít ting".
 **Fail-open tuyệt đối.** Backend lỗi/timeout/không kết nối được → giữ nguyên bản gốc, không
 bao giờ ghi phụ đề rỗng. Thoát mã `1` kèm cảnh báo rõ để không bị nhầm là đã sạch.
 
+**Backend là một lớp trừu tượng, không phải một cờ** (thêm sau G4, khi cần chạy với Azure
+OpenAI). Azure khác Anthropic ở **cả bốn** điểm — deployment trong URL, `?api-version=` bắt
+buộc, header `api-key`, system prompt là message đầu thay vì trường riêng — nên gộp bằng
+`if (provider === ...)` trong `callLlm` sẽ rối rất nhanh. `tools/lib/providers.mjs` cho mỗi
+provider khai báo 4 hàm (`url` / `headers` / `body` / `extract`); `callLlm` chỉ còn lo retry,
+timeout và fail-open. Thêm gateway nội bộ = thêm một entry, không sửa `cleanup.mjs`.
+
+Ba ràng buộc Azure được kiểm **ngay khi parse tham số**, trước khi gửi gì đi: thiếu
+deployment, thiếu api-version, hoặc `base-url` không phải `http(s)://` → thoát `2`. Lý do:
+Azure trả `404` cho cả ba trường hợp, và `404` từ Azure là một trong những lỗi khó truy nhất.
+
 ## Bug tìm được trong lúc làm
 
 1. **Round-trip mất block rỗng.** `serialize` sinh một dòng text rỗng cho block không có dòng
@@ -100,10 +112,17 @@ bao giờ ghi phụ đề rỗng. Thoát mã `1` kèm cảnh báo rõ để khô
    thoát 0 mà không làm gì. Sửa bằng `pathToFileURL(process.argv[1]).href`.
 4. **`\b` của JS theo ASCII** → cắt vào giữa từ tiếng Việt có dấu. Sửa bằng lookaround với
    lớp ký tự Latin-Extended tường minh.
+5. **Test phụ thuộc env của máy chạy** (tìm ra khi thêm provider). `DEFAULTS` trong
+   `cleanup.mjs` đọc `process.env` **lúc load module**, nên nếu shell có
+   `AZURE_OPENAI_ENDPOINT` thì provider mặc định thành `azure-openai` và các test `parseArgs`
+   đỏ vì ràng buộc Azure — test đúng hay sai lại tuỳ shell. Sửa bằng cách xoá các biến backend
+   khỏi `process.env` **trước** khi import (nên phải dùng `await import`: static import chạy
+   trước mọi câu lệnh).
 
 ## Bằng chứng
 
-**Test:** 57/57 pass, 6 suite, `node --test tools/test.mjs`, ~5.1s. 0 skip, 0 todo.
+**Test:** 75/75 pass, 8 suite, `node --test tools/test.mjs`, ~5.6s. 0 skip, 0 todo. Chạy lại
+với env bị "bẩn" (`AZURE_OPENAI_ENDPOINT` + `LLM_BASE_URL` trỏ chỗ khác): vẫn 75/75.
 
 **Bộ vàng:** `cleanup.mjs` + mock `glossary` → output **byte-identical** với
 `codeswitch-vi.expected.srt` (26/26 câu thay đổi, `diff` rỗng).
@@ -121,6 +140,14 @@ kích thước đo. Phần chậm là các lần gọi LLM tuần tự, không p
 
 **Nhãn UI:** mọi tên ô trong tài liệu đã đối chiếu với `data/locale/en-US.ini`.
 
+**Đường Azure:** stub trong `test.mjs` ghi lại mọi request và assert cả bốn điểm khác biệt —
+path `/openai/deployments/gpt-4o/chat/completions`, `api-version=2024-05-01-preview`, header
+`api-key` có / `x-api-key` + `Authorization` **không** có, `messages` là `[system, user]` và
+không có trường `system` ở tầng ngoài. Output qua đường Azure **byte-identical** với
+`codeswitch-vi.expected.srt`; đường `anthropic` vẫn byte-identical → không regression.
+Thiếu deployment → thoát `2` và stub **không nhận request nào** (sai tham số thì phụ đề
+không bị gửi đi).
+
 ## Rủi ro còn lại
 
 **Glossary là tạm.** 40 thuật ngữ với biến thể **do người viết dự đoán**, không lấy từ bản
@@ -129,16 +156,21 @@ ghi thật. Đây là thứ quyết định chất lượng. Thay file JSON là 
 **Chưa đo WER/CER trên âm thanh thật.** `evaluate_output.py` cần Python (bị chặn trong
 sandbox) và một file ghi âm họp thật. Cách đo đã ghi trong `docs/vietnamese-setup.md` mục 5.
 
-**Chưa chạy với LLM thật.** Toàn bộ verification dùng mock. Hình dạng request/response theo
-đúng Anthropic Messages API nhưng hành vi model thật sẽ khác — đặc biệt là nguy cơ trả sai số
-dòng (đã có guard giữ bản gốc).
+**Chưa chạy với LLM thật.** Toàn bộ verification dùng mock (đường Anthropic) và stub trong
+test (đường Azure). Hình dạng request/response đã đúng với cả hai, nhưng **hành vi** model
+thật sẽ khác — đặc biệt là nguy cơ trả sai số dòng (đã có guard giữ bản gốc). Endpoint Azure
+được cấp ngày 2026-09-14 không phân giải được (NXDOMAIN từ resolver máy, 8.8.8.8, và
+1.1.1.1, trong khi `openai.azure.com` và `github.com` phân giải bình thường → không phải
+sandbox chặn), nên chưa có lượt chạy nào với Azure thật.
 
 **Xử lý tuần tự.** Các batch gọi lần lượt. 1000 câu ≈ 125 batch ≈ vài phút. Đủ cho hậu kỳ.
 
 ## Bước tiếp
 
 1. Thay `tools/vib-glossary.json` bằng thuật ngữ thật của đơn vị.
-2. Trỏ `LLM_BASE_URL` vào gateway nội bộ hoặc LLM local — **không** API công cộng nếu nội
-   dung là họp nội bộ hoặc dữ liệu khách hàng.
-3. Đo WER/CER trên một buổi họp thật, `large-v3` vs `large-v2.vi`.
-4. Chỉ làm G5 nếu bắt buộc phải có phụ đề hiện ngay trên màn hình OBS.
+2. Trỏ backend vào gateway nội bộ hoặc LLM local — **không** API công cộng (kể cả Azure
+   OpenAI) nếu nội dung là họp nội bộ hoặc dữ liệu khách hàng.
+3. Chạy một lượt với LLM thật để kiểm hành vi, không chỉ hình dạng wire. Cần một endpoint
+   Azure phân giải được, hoặc một gateway nội bộ nói hình dạng `openai`.
+4. Đo WER/CER trên một buổi họp thật, `large-v3` vs `large-v2.vi`.
+5. Chỉ làm G5 nếu bắt buộc phải có phụ đề hiện ngay trên màn hình OBS.

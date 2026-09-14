@@ -43,8 +43,11 @@ node cleanup.mjs <input> -o <output> [tuỳ chọn]
       --batch-size <n>   Số câu mỗi lần gọi LLM (mặc định 8)
       --overlap <n>      Số câu trước đó gửi kèm làm ngữ cảnh (mặc định 2)
       --glossary <path>  File glossary JSON (mặc định tools/vib-glossary.json)
-      --model <name>     Model (mặc định claude-sonnet-5)
+      --provider <id>    anthropic | azure-openai | openai
+      --model <name>     Model (mặc định claude-sonnet-5; Azure bỏ qua)
       --base-url <url>   Endpoint LLM (mặc định http://127.0.0.1:5099)
+      --deployment <n>   Azure: tên deployment (bắt buộc với azure-openai)
+      --api-version <v>  Azure: api-version (mặc định 2024-05-01-preview)
       --timeout <ms>     Timeout mỗi request (mặc định 60000)
       --retries <n>      Số lần thử lại mỗi batch (mặc định 2)
       --format srt|txt   Ép định dạng thay vì suy từ đuôi file
@@ -53,11 +56,62 @@ node cleanup.mjs <input> -o <output> [tuỳ chọn]
   -h, --help             In trợ giúp
 ```
 
-Biến môi trường `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `GLOSSARY_PATH` tương đương các
-cờ cùng tên (cờ thắng).
-
 Mã thoát: `0` thành công · `1` lỗi khi chạy hoặc **có batch không làm sạch được** · `2` sai
 tham số.
+
+## Backend LLM
+
+Ba hình dạng wire được hỗ trợ, khai báo ở [`../lib/providers.mjs`](../lib/providers.mjs):
+
+| `--provider` | Endpoint gọi | Header mang key | Dùng cho |
+|---|---|---|---|
+| `anthropic` (mặc định) | `<base>/v1/messages` | `x-api-key` | Anthropic API, và `tools/mock-llm` |
+| `azure-openai` | `<base>/openai/deployments/<deployment>/chat/completions?api-version=…` | `api-key` | Azure OpenAI Service |
+| `openai` | `<base>/v1/chat/completions` | `Authorization: Bearer` | OpenAI, và hầu hết gateway nội bộ / LLM local (vLLM, Ollama, LiteLLM) vì chúng bắt chước hình dạng này |
+
+### Biến môi trường
+
+| Biến | Cờ tương đương | Ghi chú |
+|---|---|---|
+| `LLM_PROVIDER` | `--provider` | Bỏ trống thì suy: có `AZURE_OPENAI_ENDPOINT` → `azure-openai`, không thì `anthropic` |
+| `LLM_BASE_URL` | `--base-url` | Bỏ trống thì lấy `AZURE_OPENAI_ENDPOINT`, cuối cùng là `http://127.0.0.1:5099` |
+| `LLM_API_KEY` | — | Bỏ trống thì lấy `AZURE_OPENAI_API_KEY` |
+| `LLM_MODEL` | `--model` | Azure bỏ qua — model do deployment quyết định |
+| `AZURE_OPENAI_ENDPOINT` | `--base-url` | `https://<resource>.openai.azure.com` |
+| `AZURE_OPENAI_DEPLOYMENT_NAME` | `--deployment` | Bắt buộc với `azure-openai` |
+| `AZURE_OPENAI_API_VERSION` | `--api-version` | Mặc định `2024-05-01-preview` |
+| `GLOSSARY_PATH` | `--glossary` | |
+
+Cờ luôn thắng biến môi trường.
+
+### Azure OpenAI
+
+Đặt bốn biến chuẩn của Azure là đủ — provider được suy ra, không cần `--provider`:
+
+```bash
+export AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com
+export AZURE_OPENAI_API_KEY=<key>
+export AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
+export AZURE_OPENAI_API_VERSION=2024-05-01-preview
+node tools/transcript-cleanup/cleanup.mjs bien-ban.srt -o bien-ban.sach.srt
+```
+
+Azure khác Anthropic ở cả bốn điểm, nên đây là một provider riêng chứ không phải một cờ:
+deployment nằm trong URL, `?api-version=` là **bắt buộc** (thiếu là 404), key đi qua header
+`api-key`, và system prompt là message đầu `role:"system"` chứ không phải trường riêng.
+
+Thiếu `deployment`, thiếu `api-version`, hoặc `base-url` không phải `http(s)://` đều bị chặn
+ngay khi parse tham số (thoát `2`, **chưa gửi gì đi**) — nếu để Azure tự trả lời, lỗi sẽ là
+một `404` rất khó truy.
+
+### Gateway nội bộ hoặc LLM local
+
+```bash
+node tools/transcript-cleanup/cleanup.mjs bien-ban.srt -o sach.srt \
+  --provider openai --base-url http://gateway.noi-bo:8000 --model <ten-model>
+```
+
+Thêm provider mới = thêm một entry trong `../lib/providers.mjs`, không sửa `cleanup.mjs`.
 
 ## Định dạng đầu vào
 
@@ -97,8 +151,8 @@ biết là chưa sạch hết, không bị nhầm là đã xong.
    cảnh. Câu ngữ cảnh được LLM đọc nhưng kết quả bị bỏ — nếu không, một câu sẽ bị sửa hai
    lần theo hai cách khác nhau.
 4. Mỗi câu được gửi kèm số thứ tự (`5| nội dung`), và phản hồi được ghép lại theo số đó.
-5. Gọi backend theo hình dạng Anthropic Messages API (`POST /v1/messages`). Có retry với
-   backoff tuyến tính; lỗi `4xx` (trừ `408`/`429`) không retry vì thử lại cũng vậy.
+5. Gọi backend theo hình dạng của `--provider` (xem [Backend LLM](#backend-llm)). Có retry
+   với backoff tuyến tính; lỗi `4xx` (trừ `408`/`429`) không retry vì thử lại cũng vậy.
 6. Ghép text đã sửa về đúng vị trí, dựng lại file.
 
 System prompt gồm phần quy tắc cố định (không dịch, không viết lại, không đổi dấu câu/số/ký
@@ -112,15 +166,19 @@ request nhất.
 
 ## Bảo mật và tuân thủ
 
-**Tool này gửi nội dung phụ đề tới `LLM_BASE_URL`.** Nếu đó là API công cộng thì nội dung
-buổi họp rời khỏi hạ tầng của bạn. Với họp nội bộ hoặc dữ liệu khách hàng, trỏ vào gateway
-nội bộ hoặc LLM chạy local.
+**Tool này gửi nội dung phụ đề tới backend đã cấu hình.** Nếu đó là API công cộng — kể cả
+Azure OpenAI — thì nội dung buổi họp rời khỏi hạ tầng của bạn. Với họp nội bộ hoặc dữ liệu
+khách hàng, trỏ vào gateway nội bộ hoặc LLM chạy local.
 
-Tool cảnh báo trên stderr nếu `LLM_BASE_URL` không phải localhost mà lại không có
-`LLM_API_KEY` — thường là dấu hiệu cấu hình sai.
+Hai cảnh báo trên stderr khi backend không phải localhost:
 
-`LLM_API_KEY` chỉ được đặt vào header `x-api-key`, không in ra log. Log chỉ có số câu, số
-batch và độ dài; **không có nội dung câu**.
+- `CẢNH BÁO DỮ LIỆU: nội dung phụ đề đang được gửi ra khỏi máy này.` — luôn in, để không ai
+  gửi biên bản họp đi mà không biết.
+- `CẢNH BÁO: không có API key nhưng backend không phải localhost.` — thường là cấu hình sai.
+
+API key chỉ đi vào header (`x-api-key` / `api-key` / `Authorization` tuỳ provider), **không
+bao giờ vào URL, body, hay log**. Log chỉ có số câu, số batch và độ dài; **không có nội dung
+câu**. Đừng đặt key trong file commit vào repo — dùng biến môi trường.
 
 ## Test
 
