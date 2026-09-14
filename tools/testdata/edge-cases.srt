@@ -1,0 +1,47 @@
+1
+00:00:00,000 --> 00:00:02,000
+Chi phí hạ tầng tháng này là $5000 chưa gồm thuế.
+
+2
+00:00:02,500 --> 00:00:04,500
+Please review the deck before tomorrow morning.
+
+3
+00:00:05,000 --> 00:00:07,000
+Hôm nay trời mưa nên cả đội làm việc từ xa.
+
+4
+00:00:07,500 --> 00:00:09,500
+
+5
+00:00:10,000 --> 00:00:12,000
+Tỷ lệ chuyển đổi tăng 12.5% so với quý trước (số liệu tạm).
+
+6
+00:00:12,500 --> 00:00:14,500
+Đường dẫn là https://example.internal/report?id=42&type=full
+
+7
+00:00:15,000 --> 00:00:17,000
+Email liên hệ: ops-team@example.internal — gửi trước 17h.
+
+8
+00:00:17,500 --> 00:00:19,500
+Câu này nói về cái mít ting
+và bị cắt thành hai dòng phụ đề.
+
+9
+00:00:20,000 --> 00:00:22,000
+100% 200$ 300₫ 50€ — các ký hiệu tiền tệ không được đổi.
+
+10
+00:00:22,500 --> 00:00:24,500
+"Trích dẫn có ngoặc kép" và 'ngoặc đơn' phải giữ nguyên.
+
+11
+00:00:25,000 --> 00:00:27,000
+Ờ... ừm... cái đó để em check lại rồi phít bách sau.
+
+12
+00:00:27,500 --> 00:00:29,500
+ALL CAPS SENTENCE WITH KPI AND SLA MENTIONED HERE.

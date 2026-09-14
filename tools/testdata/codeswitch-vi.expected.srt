@@ -1,0 +1,103 @@
+1
+00:00:00,000 --> 00:00:03,500
+Chào cả nhà, mình bắt đầu cái meeting hôm nay nhé.
+
+2
+00:00:04,000 --> 00:00:07,500
+Đầu tiên là phần review tiến độ của dự án core banking.
+
+3
+00:00:08,000 --> 00:00:11,500
+Đội digital banking đã hoàn thành hai phần ba sprint này.
+
+4
+00:00:12,000 --> 00:00:15,500
+Bên mình có ba chỉ số KPI chưa đạt trong tháng vừa rồi.
+
+5
+00:00:16,000 --> 00:00:19,500
+Cái deadline cuối cùng là ngày hai mươi tháng này, không đổi được.
+
+6
+00:00:20,000 --> 00:00:23,500
+Anh cho em xin cái checklist của phần onboarding khách hàng mới.
+
+7
+00:00:24,000 --> 00:00:27,500
+Bộ phận compliance yêu cầu bổ sung tài liệu trước khi approve.
+
+8
+00:00:28,000 --> 00:00:31,500
+Cái dashboard theo dõi số liệu đã update lúc sáng nay.
+
+9
+00:00:32,000 --> 00:00:35,500
+Tuần sau tụi mình deploy bản mới lên server thử nghiệm.
+
+10
+00:00:36,000 --> 00:00:39,500
+Nếu có vấn đề thì escalate ngay cho quản lý trực tiếp.
+
+11
+00:00:40,000 --> 00:00:43,500
+Phần release lần này gồm cả tính năng e-KYC.
+
+12
+00:00:44,000 --> 00:00:47,500
+Khách hàng phản hồi là mã OTP về chậm hơn SLA cam kết.
+
+13
+00:00:48,000 --> 00:00:51,500
+Em đã gom hết feedback từ đội bán hàng vào một file.
+
+14
+00:00:52,000 --> 00:00:55,500
+Cái roadmap quý tới cần chốt trước buổi workshop thứ Năm.
+
+15
+00:00:56,000 --> 00:00:59,500
+Mình dùng template cũ hay làm lại cái mới hoàn toàn?
+
+16
+00:01:00,000 --> 00:01:03,500
+Phần backlog còn khá nhiều, ưu tiên mấy việc gấp trước.
+
+17
+00:01:04,000 --> 00:01:07,500
+Buổi standup sáng nay chỉ mười lăm phút thôi nhé.
+
+18
+00:01:08,000 --> 00:01:11,500
+Đội audit nội bộ sẽ vào kiểm tra quy trình tuần tới.
+
+19
+00:01:12,000 --> 00:01:15,500
+Cái scope của giai đoạn hai vẫn chưa được confirm.
+
+20
+00:01:16,000 --> 00:01:19,500
+Bên tài chính hỏi về budget cho phần thuê hạ tầng.
+
+21
+00:01:20,000 --> 00:01:23,500
+Em sẽ follow up với đối tác rồi report lại cho anh.
+
+22
+00:01:24,000 --> 00:01:27,500
+Cần align cách hiểu về customer journey trước khi vẽ luồng.
+
+23
+00:01:28,000 --> 00:01:31,500
+Số liệu data warehouse kéo về chưa khớp với báo cáo.
+
+24
+00:01:32,000 --> 00:01:35,500
+Ứng dụng mobile banking và internet banking dùng chung một token.
+
+25
+00:01:36,000 --> 00:01:39,500
+Mô hình credit scoring mới cần được validate lại.
+
+26
+00:01:40,000 --> 00:01:43,500
+Chỉ tiêu OKR của quý này gắn với tăng trưởng số lượng khách hàng.
