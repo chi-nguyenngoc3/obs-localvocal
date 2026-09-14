@@ -90,6 +90,13 @@ Current Features:
 - Partial transcriptions for a streaming-captions experience
 - 100s of fine-tuned Whisper models for dozens of languages from HuggingFace
 
+### Language-specific guides
+
+- [Vietnamese with English code-switching](docs/vietnamese-setup.md) — configuration guide
+  for speech that mixes Vietnamese with English terminology, plus a post-processing CLI in
+  [`tools/`](tools/) that repairs transliterated English terms ("mít ting" → "meeting") in
+  saved `.srt`/`.txt` transcripts.
+
 ### Available Versions
 
 LocalVocal is available in multiple versions to cater to different hardware configurations and operating systems. Below is a brief explanation of the different versions you can download:
