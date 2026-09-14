@@ -6,7 +6,9 @@
 !/build-aux
 !/cmake
 !/data
+!/docs
 !/src
+!/tools
 !/flatpak
 !.clang-format
 !.cmake-format.json
