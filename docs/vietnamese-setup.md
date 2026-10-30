@@ -128,6 +128,73 @@ thời gian, và **Write output only while recording** nếu chỉ cần khi đa
 > khách hàng, trỏ `LLM_BASE_URL` vào gateway nội bộ hoặc LLM chạy local. Xem
 > [`tools/transcript-cleanup/README.md`](../tools/transcript-cleanup/README.md).
 
+## 4b. Không cần OBS: `whisper-cli` chạy trực tiếp trên file ghi âm
+
+Nếu mục tiêu là **biên bản họp** từ một file ghi âm đã có sẵn (Voice Memos trên Mac/iPhone, file
+Zoom/Teams tải xuống, v.v.), không cần mở OBS. `whisper-cli` của `whisper.cpp` làm cả hai việc OBS
+làm (bắt âm thanh + chạy Whisper) trong một lệnh, và vì đọc **toàn bộ file** nên phiên âm hoá ít
+hơn đường realtime (xem lại phần đầu tài liệu này).
+
+> **Hướng dẫn dùng từng bước** (lấy file ra khỏi Voice Memos, kiểm máy trước khi chạy, đọc kết
+> quả, khi nào nên/không nên thêm glossary): xem
+> [`voice-memo-transcript-howto.md`](voice-memo-transcript-howto.md). Phần dưới đây là lý do kỹ
+> thuật/bằng chứng đứng sau công thức đó.
+
+Đã kiểm chứng trên máy thật (2026-09-15), gồm cả trên bản ghi thật (không chỉ TTS tổng hợp):
+
+```bash
+# Cài (một lần)
+brew install whisper-cpp
+brew install ffmpeg   # nếu chưa có
+
+# Model đa ngữ (~1.62 GB, khớp đúng model OBS gọi là "Whisper Large v3 Turbo (1.62Gb)")
+mkdir -p ~/"Library/Application Support/whisper-cpp-models"
+curl -L -C - --retry 5 -o ~/"Library/Application Support/whisper-cpp-models/ggml-large-v3-turbo.bin" \
+  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
+# QUAN TRỌNG: kiểm cỡ file sau khi tải — đừng tin exit code của một lệnh curl bị pipe qua tail/head,
+# lần đầu chạy ở đây bị đứt giữa đường (~231 MB) mà curl vẫn "trông như" chạy xong. File đúng phải
+# ~1,624,555,275 byte.
+
+# Model VAD (nhỏ, ~885 KB) — xem lý do bên dưới
+curl -L -o ~/"Library/Application Support/whisper-cpp-models/ggml-silero-v5.1.2.bin" \
+  "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
+
+# Chuyển file ghi âm (m4a/mp3/…) sang wav 16kHz mono mà whisper-cli cần
+ffmpeg -y -i hop.m4a -ar 16000 -ac 1 -c:a pcm_s16le hop.wav
+
+# Chạy — LUÔN kèm --vad, xem phần cảnh báo ngay dưới
+whisper-cli \
+  -m ~/"Library/Application Support/whisper-cpp-models/ggml-large-v3-turbo.bin" \
+  -l vi -osrt -of hop \
+  -f hop.wav \
+  --prompt "Đây là bản ghi buổi họp bằng tiếng Việt có dùng thuật ngữ tiếng Anh như meeting, review, deadline, sprint, backlog, standup, checklist, template, roadmap, workshop, feedback, dashboard, update, deploy, server, release, approve, escalate, follow up, report, align, audit, budget, scope, confirm, onboarding, compliance, core banking, digital banking, mobile banking, internet banking, customer journey, credit scoring, data, token, KPI, OKR, SLA, OTP, e-KYC." \
+  --carry-initial-prompt \
+  --vad --vad-model ~/"Library/Application Support/whisper-cpp-models/ggml-silero-v5.1.2.bin"
+
+# Rồi làm sạch code-switch bằng tools/transcript-cleanup như thường
+node tools/transcript-cleanup/cleanup.mjs hop.srt -o hop.sach.srt
+```
+
+**Vì sao `--prompt` giúp thật, không chỉ trên giấy:** thử trên một câu tổng hợp bằng giọng đọc
+`say -v Linh`, tắt prompt mất cả 6/6 thuật ngữ tiếng Anh (`sprint→screen`, `deadline→đẹp lại`,
+`team→Tim`, `deploy→e-coi`, `core banking→co banking`, `KPI→ca tờ y`); bật `--prompt` thì đúng lại
+4/6 (`sprint`, `deadline`, `team`, `core banking`). Hai từ còn sai (`deploy→e-play`, `KPI→KTI`) đã
+được thêm vào `tools/vib-glossary.json` làm biến thể mới.
+
+**Vì sao `--vad` là bắt buộc, không phải tuỳ chọn:** không có nó, trên một bản ghi thật dài 6 phút,
+Whisper phiên âm đúng đến giây 5:11 rồi lặp lại một câu "ảo giác" (hallucination) — một câu quảng
+cáo kênh YouTube không có trong audio — suốt gần một phút cuối, đúng lúc audio chuyển sang đoạn nói
+nhỏ/thưa. Đây là lỗi đã biết của Whisper khi gặp audio yếu mà không có VAD lọc trước. Bật `--vad`
+với model Silero ở trên loại bỏ hoàn toàn câu ảo giác đó, và một lợi ích phụ: tỷ lệ đoạn phải
+fallback (decoder không chắc) giảm từ 12/36 xuống 0/0 trên cùng file, vì VAD cắt sẵn ranh giới câu
+nói sạch hơn cho decoder.
+
+**Giới hạn đã thấy khi chạy trên nội dung thật:** `tools/vib-glossary.json` là thuật ngữ hành chính
+chung (meeting/deadline/KPI/sprint…), không phải thuật ngữ nghiệp vụ riêng. Với thuật ngữ nghiệp vụ
+chưa có trong danh sách, `transcript-cleanup` sẽ không thay đổi câu đó. Đúng như phần "Danh sách hiện
+tại là tạm" ở trên đã nói: thêm thuật ngữ thật của đơn vị bạn vào `tools/vib-glossary.json` mới là thứ
+quyết định chất lượng, không phải chọn model hay chỉnh tham số.
+
 ## 5. Đo thay vì đoán
 
 Các đề nghị trên là điểm khởi đầu hợp lý, không phải kết luận cho giọng nói và bộ thuật ngữ
