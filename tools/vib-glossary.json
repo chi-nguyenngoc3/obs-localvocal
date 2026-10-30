@@ -8,7 +8,7 @@
     { "term": "core banking", "variants": ["cor banking", "co banking", "co ba king", "co-banking"] },
     { "term": "digital banking", "variants": ["đi gi tan banking", "đi gi tôn banking", "đi-gi-tan banking"] },
     { "term": "sprint", "variants": ["sờ prin", "sờ-prin", "sơ prin"] },
-    { "term": "KPI", "variants": ["ca pi ai", "ka pi ai", "cây pi ai"] },
+    { "term": "KPI", "variants": ["ca pi ai", "ka pi ai", "cây pi ai", "ca tờ y", "KTI"] },
     { "term": "OKR", "variants": ["âu ke a", "ô ke a", "âu kê a"] },
     { "term": "deadline", "variants": ["đét lai", "đét-lai", "đét lain", "đe lai"] },
     { "term": "checklist", "variants": ["chếch lít", "chéc lít", "chếch-lít"] },
@@ -17,7 +17,7 @@
     { "term": "approve", "variants": ["ờ prúp", "a prúp", "ờ-prúp"] },
     { "term": "dashboard", "variants": ["đát bo", "đát-sờ-bo", "đát sờ bo"] },
     { "term": "update", "variants": ["ắp đết", "áp đết", "ắp-đết", "úp đết"] },
-    { "term": "deploy", "variants": ["đi ploi", "đê ploi", "đi-ploi"] },
+    { "term": "deploy", "variants": ["đi ploi", "đê ploi", "đi-ploi", "e-coi", "e-play"] },
     { "term": "server", "variants": ["sơ vơ", "sơ-vơ", "sờ vơ"] },
     { "term": "escalate", "variants": ["ét ca lết", "ét-ca-lết", "ết ca lết"] },
     { "term": "release", "variants": ["ri lít", "ri-lít", "ri lịt"] },
@@ -42,6 +42,9 @@
     { "term": "mobile banking", "variants": ["mô bai banking", "mô-bai banking", "mo bai banking"] },
     { "term": "internet banking", "variants": ["in tơ nét banking", "in-tơ-nét banking", "in tơ net banking"] },
     { "term": "token", "variants": ["tô ken", "tô-ken", "tô kèn"] },
-    { "term": "credit scoring", "variants": ["cre đít sờ co ring", "cờ re đít sờ co ring", "cre-đít sờ-co-ring"] }
+    { "term": "credit scoring", "variants": ["cre đít sờ co ring", "cờ re đít sờ co ring", "cre-đít sờ-co-ring"] },
+    { "term": "fully booked", "variants": ["fulling book", "fulling booked"] },
+    { "term": "lending", "variants": ["landing"] },
+    { "term": "căn cước công dân", "variants": ["căn cức công dân"] }
   ]
 }
