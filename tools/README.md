@@ -6,6 +6,10 @@ Công cụ hỗ trợ cho tiếng Việt có chêm tiếng Anh. Node thuần (>=
 Bắt đầu từ [`docs/vietnamese-setup.md`](../docs/vietnamese-setup.md) — phần lớn lỗi phiên âm
 hoá giảm được bằng cấu hình, chưa cần tới tool nào ở đây.
 
+Nếu bạn có sẵn **file ghi âm** (Voice Memos, Zoom/Teams, v.v.) và muốn biên bản họp mà không
+cần mở OBS, đọc [`docs/voice-memo-transcript-howto.md`](../docs/voice-memo-transcript-howto.md)
+— hướng dẫn từng bước dùng `whisper-cli` + các tool ở đây.
+
 ## Có gì
 
 | Thư mục | Là gì |
